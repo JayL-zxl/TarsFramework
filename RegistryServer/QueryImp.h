@@ -33,7 +33,12 @@ enum FUNID
     FUNID_findObjectByIdInSameStation = 4,
     FUNID_findObjectByIdInSameSet     = 5
 };
-
+enum  RULEID
+{
+    RULEID_routeByNoRule = 0,
+    RULEID_routeByProportion = 1,
+    RULEID_routeByRequestParameters = 2
+};
 //////////////////////////////////////////////////////
 /**
  * 对象查询接口类
@@ -85,7 +90,10 @@ public:
      * 根据id获取对象同set endpoint列表
      */
     Int32 findObjectByIdInSameSet(const std::string & id,const std::string & setId,vector<EndpointF> &activeEp,vector<EndpointF> &inactiveEp, CurrentPtr current);
-
+    /**
+     * 根据分组信息和server名称获取SubSet Rule
+     */
+    Int32 findSubsetConfigById(const std::string & id,const std::string & setId,SubsetConf &conf, CurrentPtr current);    
 private:
     /**
      * 打印按天日志

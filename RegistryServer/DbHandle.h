@@ -97,8 +97,10 @@ private:
     };
 
     //<servant,setname,vector>
+    // 1. servant --> set 这个servant在哪个set
+    // 2. 这个set里都有哪些serverInfo
     typedef map<string,map<string,vector<CDbHandle::SetServerInfo> > > SetDivisionCache;
-
+    typedef map<string,SubsetConf> SubSetRuleCache;
 public:
     /**
      * 构造函数
@@ -114,11 +116,6 @@ public:
      * @return 0-成功 others-失败
      */
     int init(TC_Config *pconf);
-
-    /**
-     * 升级表结构
-     */ 
-    void updateMysql();
 
     /**
      * 获取特定node id的对象代理
@@ -190,14 +187,6 @@ public:
     string getProfileTemplate(const string & sTemplateName, string & sResultDesc);
 
     void getAllDynamicWeightServant(std::vector<string> &vtServant);
-    /**
-     * 暂停服务， 关闭服务流量
-    * @param app:       应用
-     * @param serverName: server 名
-     * @param nodeList : node id list
-     * @return 0-成功 others-失败
-     */
-    int updateServerFlowState(const string & app, const string & serverName, const vector<string>& nodeList, bool bActive);
 
 protected:
     /**
@@ -456,7 +445,14 @@ public:
      * ip转换
      */
     static string Ip2StarStr(uint32_t ip);
-
+    /**
+     * 加载SubSet Rule信息到内存中
+     * @param id 对象名称
+     * @param setId  set名称
+     * @param conf 利用引用获取的SubSet的config信息
+     * @return 0-成功 others-失败
+     */
+    int findSubsetConfigById(const std::string & id, const std::string & setId,SubsetConf &conf, std::ostringstream & os);
 protected:
 
     /**
@@ -482,15 +478,6 @@ private:
     void updateStatusCache(const std::map<ServantStatusKey, int>& mStatus,bool updateAll=false);
 
     /**
-     * 更新缓存中的服务流量状态值
-     *
-     * @param mStatus
-     * @param updateAll 是否全部更新
-     * @param bFirstLoad  是否是第一次全量加载
-     */
-    void updateFlowStatusCache(const std::map<ServantStatusKey, int>& mStatus, bool updateAll);
-
-    /**
      * 更新缓存中的服务信息
      *
      * @param objCache
@@ -507,7 +494,14 @@ private:
      * @param bFirstLoad  是否是第一次全量加载
      */
     void updateDivisionCache(const SetDivisionCache& setDivisionCache,bool updateAll=false);
-
+    /**
+     * 更新缓存中的subset rule信息
+     *
+     * @param subSetRuleCache
+     * @param updateAll 是否全部更新
+     * @param bFirstLoad  是否是第一次全量加载
+     */
+    void updateSubSetRuleCache(const SubSetRuleCache& subSetRuleCache,bool updateAll = false);
     /**
      * 对数据库查询结果执行联合操作
      *
@@ -545,21 +539,16 @@ protected:
 
     //set划分缓存
     static TC_ReadersWriterData<SetDivisionCache> _setDivisionCache;
-
+    //subset规则缓存
+    static TC_ReadersWriterData<SubSetRuleCache> _subSetRuleCache;
     //优先级的序列
     static TC_ReadersWriterData<std::map<int, GroupPriorityEntry> > _mapGroupPriority;
 
     //servant状态表
     static std::map<ServantStatusKey, int> _mapServantStatus;
 
-    //servant流量状态表
-    static std::map<ServantStatusKey, int> _mapServantFlowStatus;
-
     //存在多线程更新_mapServantStatus，需要加锁
     static TC_ThreadLock _mapServantStatusLock;
-
-    //存在多线程更新_mapServantFlowStatus，需要加锁
-    static TC_ThreadLock _mapServantFlowStatusLock;
 
     //分组信息
     static TC_ReadersWriterData<map<string,int> > _groupIdMap;

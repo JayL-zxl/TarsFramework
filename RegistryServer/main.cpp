@@ -64,12 +64,12 @@ int main(int argc, char *argv[])
 {
     try
     {
-		doCommand(argc, argv);
+		doCommand(argc, argv); // 解析命令行参数，将命令行的配置文件config和对应的路径存入到TC_Option类的_mparam成员变量中
 
-        g_pconf =  & g_app.getConfig();
-        g_app.main(argc, argv);
-
-        g_app.waitForShutdown();
+        g_pconf =  & g_app.getConfig(); // 
+        g_app.main(argc, argv); // 主要函数
+ 
+        g_app.waitForShutdown(); // 等待关闭的函数
     }
     catch(exception &ex)
     {

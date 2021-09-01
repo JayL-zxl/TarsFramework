@@ -78,7 +78,6 @@ int ReapThread::init()
 
     //加载对象列表
     _db.loadObjectIdCache(_recoverProtect, _recoverProtectRate,0,true, true);
-
     TLOGDEBUG("ReapThread init ok."<<endl);
 
     return 0;
@@ -98,7 +97,6 @@ void ReapThread::run()
 
     //全量加载时间
     time_t tLastLoadObjectsStep2 = TC_TimeProvider::getInstance()->getNow();
-
     time_t tLastQueryServer      = 0;
     time_t tNow;
     while(!_terminate)

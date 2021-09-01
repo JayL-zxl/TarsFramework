@@ -77,7 +77,7 @@ int QueryImp::findObjectByIdInSameStation(const std::string & id, const std::str
     ostringstream os;
 
     int iRet = _db.findObjectByIdInSameStation(id, sStation, activeEp, inactiveEp, os);
-
+    
     doDaylog(FUNID_findObjectByIdInSameStation,id,activeEp,inactiveEp,current,os);
 
     return iRet;
@@ -118,6 +118,35 @@ Int32 QueryImp::findObjectByIdInSameSet(const std::string & id,const std::string
     return iRet;
 }
 
+// todo: 新增加的接口
+Int32 QueryImp::findSubsetConfigById(const std::string & id,const std::string & setId,SubsetConf &conf, CurrentPtr current) {
+    
+    vector<string> vtSetInfo = TC_Common::sepstr<string>(setId,".");
+    // 应用名.服务名.端口名
+    vector<string> vtIdInfo = TC_Common::sepstr<string>(id,".");
+    if (vtIdInfo.size() != 3 ) {
+        TLOGERROR("QueryImp::findSubsetConfigById:|id parse error[" << id << "_" << setId <<"]|" << current->getHostName()  << endl);
+        return -1;
+    }
+    string application = vtIdInfo[0];
+    string server_name = vtIdInfo[1];
+    if (vtSetInfo.size()!=3 ||(vtSetInfo.size()==3&&(vtSetInfo[0]=="*"||vtSetInfo[1]=="*")))
+    {
+        TLOGERROR("QueryImp::findSubsetConfigById:|set full name error[" << id << "_" << setId <<"]|" << current->getHostName()  << endl);
+        return -1;
+    }
+
+    ostringstream os;
+    string key = application + "." + server_name;
+    int iRet = _db.findSubsetConfigById(key, setId,conf, os);
+    if (-1 == iRet)
+    {
+        // 未找到对应的subset信息
+        TLOGERROR("QueryImp::findSubsetConfigById:|find subset config error [" << id << "_" << setId <<"]|" << current->getHostName()  << endl);
+        return iRet;
+    }
+    return iRet;
+}
 void QueryImp::doDaylog(const FUNID eFnId,const string& id,const vector<EndpointF> &activeEp, const vector<EndpointF> &inactiveEp, const CurrentPtr& current,const ostringstream& os,const string& sSetid)
 {
 	if(_openDayLog) {

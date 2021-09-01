@@ -26,10 +26,7 @@ TC_ReadersWriterData<ObjectsCache> CDbHandle::_objectsCache;
 TC_ReadersWriterData<std::map<int, CDbHandle::GroupPriorityEntry> > CDbHandle::_mapGroupPriority;
 
 std::map<ServantStatusKey, int> CDbHandle::_mapServantStatus;
-std::map<ServantStatusKey, int> CDbHandle::_mapServantFlowStatus;
-
 TC_ThreadLock CDbHandle::_mapServantStatusLock;
-TC_ThreadLock CDbHandle::_mapServantFlowStatusLock;
 
 map<string, NodePrx> CDbHandle::_mapNodePrxCache;
 TC_ThreadLock CDbHandle::_NodePrxLock;
@@ -40,7 +37,7 @@ TC_ReadersWriterData<map<string, int> > CDbHandle::_groupIdMap;
 TC_ReadersWriterData<map<string, int> > CDbHandle::_groupNameMap;
 
 TC_ReadersWriterData<CDbHandle::SetDivisionCache> CDbHandle::_setDivisionCache;
-
+TC_ReadersWriterData<CDbHandle::SubSetRuleCache> CDbHandle::_subSetRuleCache;
 tars::TC_Mysql CDbHandle::_mysqlQueryStat;
 bool CDbHandle::_isMysqlQueryStatInited = false;
 
@@ -81,17 +78,6 @@ int CDbHandle::init(TC_Config *pconf)
     }
 
     return 0;
-}
-
-void CDbHandle::updateMysql()
-{
-    try
-    {
-        _mysqlReg.execute("alter table `t_server_conf` add `flow_state` enum ('active','inactive') NOT NULL DEFAULT 'active'");
-    }
-    catch(const std::exception& e)
-    {
-    }
 }
 
 int CDbHandle::registerNode(const string& name, const NodeInfo& ni, const LoadInfo& li)
@@ -991,7 +977,6 @@ int CDbHandle::getGroupIdByName(const string& sGroupName)
     TLOGINFO("CDbHandle::getGroupIdByName " << sGroupName << "|" << endl);
     return -1;
 }
-
 int CDbHandle::loadIPPhysicalGroupInfo(bool fromInit)
 {
     TC_Mysql::MysqlData res;
@@ -1250,8 +1235,7 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
     ObjectsCache objectsCache;
     SetDivisionCache setDivisionCache;
     std::map<ServantStatusKey, int> mapStatus;
-    std::map<ServantStatusKey, int> mapFlowStatus;
-
+    SubSetRuleCache  subSetRuleCache;
     try
     {
         int64_t iStart = TNOWMS;
@@ -1265,8 +1249,10 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
 
         //加载存活server及registry列表信息
         string sSql1 =
-              "select adapter.servant,adapter.endpoint,server.enable_group,server.setting_state,server.present_state, server.flow_state, server.application,server.server_name,server.node_name,server.enable_set,server.set_name,server.set_area,server.set_group,server.ip_group_name,server.bak_flag "
+              "select adapter.servant,adapter.endpoint,server.enable_group,server.setting_state,server.present_state,server.application,server.server_name,server.node_name,server.enable_set,server.set_name,server.set_area,server.set_group,server.ip_group_name,server.bak_flag "
               "from t_adapter_conf as adapter right join t_server_conf as server using (application, server_name, node_name)";
+        // 加载subset信息
+        string subSql = "select application, set_name, set_group,set_area,server_name, rule_type,rule_data from t_subset_rule";
 
         //增量加载逻辑
         if (!bLoadAll)
@@ -1277,11 +1263,37 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
             sSql1 += " union select distinct application,server_name from t_adapter_conf";
             sSql1 += " where registry_timestamp >='" + sInterval + "') as tmp";
             sSql1 += " where server.application=tmp.application and server.server_name=tmp.server_name";
+            subSql += "where registry_timestamp >=" + sInterval;
         }
 
-        string sSql2 = "select servant, endpoint, enable_group, present_state as setting_state, present_state, 'active' as flow_state, tars_version as application, tars_version as server_name, tars_version as node_name,'N' as enable_set,'' as set_name,'' as set_area,'' as set_group ,'' "
+        string sSql2 = "select servant, endpoint, enable_group, present_state as setting_state, present_state, tars_version as application, tars_version as server_name, tars_version as node_name,'N' as enable_set,'' as set_name,'' as set_area,'' as set_group ,'' "
                        "as ip_group_name , '' as bak_flag from t_registry_info order by endpoint";
-
+        TC_Mysql::MysqlData subres;
+        {
+            subres = _mysqlReg.queryRecord(subSql); 
+        }
+        SubsetConf subsetconf;
+        for (unsigned i = 0; i < subres.size(); i++)
+        {
+            try
+            {
+                string application = subres[i]["application"];
+                string set_name = subres[i]["set_name"];
+                string set_group = subres[i]["set_group"];
+                string set_area = subres[i]["set_area"];
+                string server_name = subres[i]["server_name"];
+                string load_key = application + "." + server_name + "." + set_name + "." + set_area +  "." + set_group;
+                subsetconf.ruleType = subres[i]["rule_type"];
+                subsetconf.enable = true;
+                subsetconf.ruleData = subres[i]["rule_data"];
+                subSetRuleCache[load_key] = subsetconf;
+            } 
+            catch (TC_EndpointParse_Exception& ex)
+            {
+                std::cout << "error is:"<<ex.what() << endl;
+                TLOGERROR("CDbHandle::loadObjectIdCache " << ex.what() << endl);
+            }
+        }
         TC_Mysql::MysqlData res;
 
         {
@@ -1293,6 +1305,7 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
             iStart = TNOWMS;
             res = UnionRecord(res1, res2);
         }
+        
         for (unsigned i = 0; i < res.size(); i++)
         {
             try
@@ -1349,13 +1362,7 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
                 }
 
                 epf.setId       = "";
-                epf.bakFlag     = TC_Common::strto<int>(res[i]["bak_flag"]);
-                if (epf.bakFlag == 1)
-                {
-                    // 设置为备机时（bakFlag = 1）时， 节点不返回给客户端 
-                    TLOGDEBUG(res[i]["application"] << "." << res[i]["server_name"] << "-" << res[i]["node_name"] << " bakFlag==1" << endl);
-                    continue;
-                }
+                epf.bakFlag        = TC_Common::strto<int>(res[i]["bak_flag"]);
 
                 bool bSet = TC_Common::lower(res[i]["enable_set"]) == "y";
                 if (bSet)
@@ -1377,9 +1384,7 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
 
                 ServantStatusKey statusKey = { res[i]["application"], res[i]["server_name"], res[i]["node_name"] }; 
                 
-                // if ((res[i]["setting_state"] == "active" && res[i]["present_state"] == "active") 
-                //     || res[i]["servant"] == "taf.tafAdminRegistry.AdminRegObj") //如果是管理服务, 强制认为它是活的
-                if (res[i]["setting_state"] == "active" && res[i]["present_state"] == "active" && res[i]["flow_state"] != "inactive") 
+                if ((res[i]["setting_state"] == "active" && res[i]["present_state"] == "active"))
                 {
                     //存活列表
                     objectsCache[res[i]["servant"]].vActiveEndpoints.push_back(epf);
@@ -1391,15 +1396,6 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
                     objectsCache[res[i]["servant"]].vInactiveEndpoints.push_back(epf);
                     mapStatus[statusKey] = Inactive;
                     bActive = false;
-                }
-
-                if (res[i]["flow_state"] == "inactive")
-                {
-                    mapFlowStatus[statusKey] = Inactive;
-                }
-                else
-                {
-                    mapFlowStatus[statusKey] = Active;
                 }
 
                 if (bSet)
@@ -1453,12 +1449,10 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
 
         updateObjectsCache(objectsCache, bLoadAll);
         updateStatusCache(mapStatus, bLoadAll);
-        updateFlowStatusCache(mapFlowStatus, bLoadAll);
         updateDivisionCache(setDivisionCache, bLoadAll);
-
+        updateSubSetRuleCache(subSetRuleCache,bLoadAll);
         TLOGDEBUG("loaded objects to cache  size:" << objectsCache.size() << endl);
         TLOGDEBUG("loaded server status to cache size:" << mapStatus.size() << endl);
-        TLOGDEBUG("loaded server flow status to cache size:" << mapFlowStatus.size() << endl);
         TLOGDEBUG("loaded set server to cache size:" << setDivisionCache.size() << endl);
         // FDLOG() << "loaded objects to cache size:" << objectsCache.size() << endl;
         // FDLOG() << "loaded set server to cache size:" << setDivisionCache.size() << endl;
@@ -1490,6 +1484,24 @@ int CDbHandle::loadObjectIdCache(const bool bRecoverProtect, const int iRecoverP
     }
 
     return 0;
+}
+//TODO: 新增加的接口实现
+int CDbHandle::findSubsetConfigById(const std::string & id, const std::string & setId,SubsetConf &conf, std::ostringstream & os) {
+
+    string key = id + "." + setId;
+    SubSetRuleCache::iterator it;
+    SubSetRuleCache& subsetCache = _subSetRuleCache.getReaderData();
+
+    if ((it = subsetCache.find(key)) != subsetCache.end())
+    {
+        conf = it->second;
+        conf.enable = true;
+        return 0;
+    }
+    TLOGINFO("findSubsetConfigById:" << __LINE__ << "|" << key << " haven't start subset" << setId << endl);
+    os << "|not found subset config:" << "| id " << id << " | setId" << setId;
+    conf.enable = false;
+    return -1;
 }
 
 int CDbHandle::updateRegistryInfo2Db(bool bRegHeartbeatOff)
@@ -1828,7 +1840,7 @@ int CDbHandle::findObjectByIdInSameSet(const string& sID, const vector<string>& 
 
 int CDbHandle::findObjectByIdInSameSet(const string& sSetId, const vector<SetServerInfo>& vSetServerInfo, std::vector<EndpointF>& vecActive, std::vector<EndpointF>& vecInactive, std::ostringstream& os)
 {
-    for (size_t i = 0; i < vSetServerInfo.size(); ++i)
+    for (size_t i = 0; i < vSetServerInfo.size(); ++i)  
     {
         if (vSetServerInfo[i].sSetId == sSetId)
         {
@@ -1894,24 +1906,6 @@ void CDbHandle::updateStatusCache(const std::map<ServantStatusKey, int>& mStatus
     }
 }
 
-void CDbHandle::updateFlowStatusCache(const std::map<ServantStatusKey, int>& mStatus, bool updateAll)
-{
-    TC_ThreadLock::Lock lock(_mapServantFlowStatusLock);
-    if (updateAll)
-    {
-        //全量更新
-        _mapServantFlowStatus = mStatus;
-    }
-    else
-    {
-        std::map<ServantStatusKey, int>::const_iterator it = mStatus.begin();
-        for (; it != mStatus.end(); it++)
-        {
-            _mapServantFlowStatus[it->first] = it->second;
-        }
-    }
-}
-
 void CDbHandle::updateObjectsCache(const ObjectsCache& objCache, bool updateAll)
 {
     //全量更新
@@ -1965,6 +1959,34 @@ void CDbHandle::updateDivisionCache(const SetDivisionCache& setDivisionCache, bo
         _setDivisionCache.swap();
     }
 }
+void CDbHandle::updateSubSetRuleCache(const SubSetRuleCache& subSetRuleCache,bool updateAll)
+{
+    //全量更新
+    if (updateAll)
+    {
+        _subSetRuleCache.getWriterData() = subSetRuleCache;
+        _subSetRuleCache.swap();
+    }
+    else
+    {
+        _subSetRuleCache.getWriterData() = _subSetRuleCache.getReaderData();
+        SubSetRuleCache& tmpSubSetRuleCache = _subSetRuleCache.getWriterData();
+        SubSetRuleCache::const_iterator it = subSetRuleCache.begin();
+        for (; it != subSetRuleCache.end(); it++)
+        {
+            //有subset信息才更新
+            if (it->second.enable)
+            {
+                tmpSubSetRuleCache[it->first] = it->second;
+            }
+            else if (tmpSubSetRuleCache.count(it->first))
+            {
+                tmpSubSetRuleCache.erase(it->first);
+            }
+        }
+        _subSetRuleCache.swap();
+    }
+}
 void CDbHandle::sendSqlErrorAlarmSMS(const string &err)
 {
     string errInfo = " ERROR:" + g_app.getAdapterEndpoint().getHost() +  ": registry error: " + err + ", please check!";
@@ -2006,24 +2028,4 @@ string CDbHandle::Ip2StarStr(uint32_t ip)
     unsigned char  *p = (unsigned char *)&ip;
     sprintf(str, "%u.%u.%u.*", p[3], p[2], p[1]);
     return string(str);
-}
-
-int CDbHandle::updateServerFlowState(const string & app, const string & serverName, const vector<string>& nodeList, bool bActive)
-{
-    TLOGDEBUG("CDbHandle::updateServerFlowState:" << app << "." << serverName << ", " << TC_Common::tostr(nodeList) << ", status:" << (bActive ? "active" : "inactive") << endl);
-    TC_ThreadLock::Lock lock(_mapServantFlowStatusLock);
-    for (size_t i = 0; i < nodeList.size(); i++)
-    {
-        ServantStatusKey statusKey = {app, serverName, nodeList[i]};
-        if (bActive) 
-        {
-            _mapServantFlowStatus[statusKey] = Active;
-        }
-        else
-        {
-            _mapServantFlowStatus[statusKey] = Inactive;
-        }
-    }
-
-    return 0;
 }
